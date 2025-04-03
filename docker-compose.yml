@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+      POSTGRES_DB: ${DB_NAME:-indexer}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  web3-indexer:
+    build:
+      context: ./packages/go-web3-superbase
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-password}
+      - DB_NAME=${DB_NAME:-indexer}
+      - ETHEREUM_RPC_URL=${ETHEREUM_RPC_URL}
+      - POLYGON_RPC_URL=${POLYGON_RPC_URL}
+      - SEPOLIA_RPC_URL=${SEPOLIA_RPC_URL}
+    volumes:
+      - ./packages/go-web3-superbase/config:/app/config
+      - ./packages/go-web3-superbase/abis:/app/abis
+    command: [
+      "--config", "/app/config/config.json",
+      "--contract", "${CONTRACT_NAME:-erc20}"
+    ]
+    restart: unless-stopped
+
+  # Add more services here as needed
+  # Example:
+  # api-service:
+  #   build:
+  #     context: ./packages/api-service
+  #     dockerfile: Dockerfile
+  #   depends_on:
+  #     - postgres
+  #   environment:
+  #     - DB_HOST=postgres
+  #     - DB_PORT=5432
+  #   ports:
+  #     - "8080:8080"
+
+volumes:
+  postgres_data: 

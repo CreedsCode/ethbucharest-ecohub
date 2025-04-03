@@ -1,0 +1,18 @@
+{
+  "name": "go-web3-superbase",
+  "version": "1.0.0",
+  "description": "Ethereum event indexer with Supabase integration",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "indexer": "pnpm --filter @ethbucharest/evm-indexer start",
+    "indexer:build": "pnpm --filter @ethbucharest/evm-indexer build",
+    "indexer:test": "pnpm --filter @ethbucharest/evm-indexer test",
+    "indexer:clean": "pnpm --filter @ethbucharest/evm-indexer clean"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

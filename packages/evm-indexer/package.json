@@ -1,0 +1,11 @@
+{
+  "name": "@ethbucharest/evm-indexer",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "go run main.go",
+    "build": "go build",
+    "test": "go test ./...",
+    "clean": "go clean"
+  }
+} 
