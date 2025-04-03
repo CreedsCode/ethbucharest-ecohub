@@ -281,10 +281,8 @@ func (i *Indexer) Start(ctx context.Context) {
 		lastProcessedBlock = i.config.StartBlock
 	}
 
-	// Always start from the configured START_BLOCK if it's earlier than the last processed block
-	if i.config.StartBlock < lastProcessedBlock {
-		log.Printf("Overriding last processed block %d with configured START_BLOCK %d",
-			lastProcessedBlock, i.config.StartBlock)
+	// Start from the greater of last processed block or configured start block
+	if lastProcessedBlock < i.config.StartBlock {
 		lastProcessedBlock = i.config.StartBlock
 	}
 
