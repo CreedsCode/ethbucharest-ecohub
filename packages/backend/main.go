@@ -25,13 +25,23 @@ import (
 // @host      localhost:8080
 // @BasePath  /api/v1
 
+type RegisterRequest struct {
+	Email      string `json:"email" binding:"required,email"`
+	Password   string `json:"password" binding:"required,min=8"`
+	TenantName string `json:"tenant_name" binding:"required"`
+}
+
 func main() {
 	r := gin.Default()
+
+	// Initialize auth service
+	authService := NewAuthService()
 
 	// API v1 group
 	v1 := r.Group("/api/v1")
 	{
 		v1.GET("/health", healthCheck)
+		v1.POST("/register", registerUser(authService))
 	}
 
 	// Swagger documentation
@@ -39,6 +49,37 @@ func main() {
 
 	if err := r.Run(":8080"); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
+	}
+}
+
+// @Summary     Register a new user
+// @Description Register a new user with email, password and tenant name
+// @Tags        auth
+// @Accept      json
+// @Produce     json
+// @Param       request body RegisterRequest true "Registration details"
+// @Success     200 {object} map[string]string
+// @Failure     400 {object} map[string]string
+// @Failure     500 {object} map[string]string
+// @Router      /register [post]
+func registerUser(authService *AuthService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req RegisterRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		userId, err := authService.RegisterUser(req.Email, req.Password, req.TenantName)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"message": "User registered successfully",
+			"user_id": userId,
+		})
 	}
 }
 

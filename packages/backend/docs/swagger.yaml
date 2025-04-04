@@ -1,4 +1,19 @@
 basePath: /api/v1
+definitions:
+  main.RegisterRequest:
+    properties:
+      email:
+        type: string
+      password:
+        minLength: 8
+        type: string
+      tenant_name:
+        type: string
+    required:
+    - email
+    - password
+    - tenant_name
+    type: object
 host: localhost:8080
 info:
   contact:
@@ -30,4 +45,40 @@ paths:
       summary: Health check endpoint
       tags:
       - health
+  /register:
+    post:
+      consumes:
+      - application/json
+      description: Register a new user with email, password and tenant name
+      parameters:
+      - description: Registration details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Register a new user
+      tags:
+      - auth
 swagger: "2.0"
