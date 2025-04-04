@@ -14,7 +14,11 @@
     "backend": "cd packages/backend && export $(grep -v '^#' .env | xargs) && go run .",
     "backend:docs": "cd packages/backend && $HOME/go/bin/swag init",
     "backend:build": "cd packages/backend && go build -o bin/server",
-    "backend:test": "cd packages/backend && go test ./..."
+    "backend:test": "cd packages/backend && go test ./...",
+    "frontend:dev": "cd packages/frontend && pnpm dev",
+    "frontend:build": "cd packages/frontend && pnpm build",
+    "frontend:test": "cd packages/frontend && pnpm test",
+    "frontend:clean": "cd packages/frontend && pnpm clean"
   },
   "keywords": [],
   "author": "",
