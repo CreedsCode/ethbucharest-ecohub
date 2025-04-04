@@ -31,6 +31,10 @@ type RegisterRequest struct {
 	TenantName string `json:"tenant_name" binding:"required"`
 }
 
+type UserInfoRequest struct {
+	UserId string `json:"user_id" binding:"required"`
+}
+
 func main() {
 	r := gin.Default()
 
@@ -42,6 +46,7 @@ func main() {
 	{
 		v1.GET("/health", healthCheck)
 		v1.POST("/register", registerUser(authService))
+		v1.POST("/user/info", getUserWithTenant(authService))
 	}
 
 	// Swagger documentation
@@ -94,4 +99,38 @@ func healthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
 	})
+}
+
+// @Summary     Get user with tenant information
+// @Description Retrieve user information along with their tenant and role
+// @Tags        user
+// @Accept      json
+// @Produce     json
+// @Param       request body UserInfoRequest true "User ID"
+// @Success     200 {object} map[string]interface{}
+// @Failure     400 {object} map[string]string
+// @Failure     404 {object} map[string]string
+// @Failure     500 {object} map[string]string
+// @Router      /user/info [post]
+func getUserWithTenant(authService *AuthService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req UserInfoRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		userInfo, err := authService.GetUserWithTenantInfo(req.UserId)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		if userInfo == nil || len(userInfo) == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "User not found or has no tenant information"})
+			return
+		}
+
+		c.JSON(http.StatusOK, userInfo)
+	}
 }

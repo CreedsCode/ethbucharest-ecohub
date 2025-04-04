@@ -1,0 +1,1 @@
+CREATE POLICY users_tenants_insert_policy ON public.users_tenants FOR INSERT WITH CHECK (true); CREATE POLICY users_tenants_update_policy ON public.users_tenants FOR UPDATE USING (true); CREATE POLICY users_tenants_delete_policy ON public.users_tenants FOR DELETE USING (true);

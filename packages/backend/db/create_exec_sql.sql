@@ -1,0 +1,1 @@
+CREATE OR REPLACE FUNCTION public.exec_sql(sql_query TEXT) RETURNS TEXT AS $$ BEGIN EXECUTE sql_query; RETURN 'OK'; END; $$ LANGUAGE plpgsql SECURITY DEFINER; GRANT EXECUTE ON FUNCTION public.exec_sql TO authenticated; GRANT EXECUTE ON FUNCTION public.exec_sql TO anon;

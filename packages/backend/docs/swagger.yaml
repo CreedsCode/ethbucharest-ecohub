@@ -14,6 +14,13 @@ definitions:
     - password
     - tenant_name
     type: object
+  main.UserInfoRequest:
+    properties:
+      user_id:
+        type: string
+    required:
+    - user_id
+    type: object
 host: localhost:8080
 info:
   contact:
@@ -81,4 +88,45 @@ paths:
       summary: Register a new user
       tags:
       - auth
+  /user/info:
+    post:
+      consumes:
+      - application/json
+      description: Retrieve user information along with their tenant and role
+      parameters:
+      - description: User ID
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.UserInfoRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get user with tenant information
+      tags:
+      - user
 swagger: "2.0"
