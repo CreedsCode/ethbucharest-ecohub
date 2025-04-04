@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"math/big"
@@ -43,6 +44,7 @@ type Config struct {
 	ContractAddress string
 	ContractABI     string
 	StartBlock      uint64
+	TenantID        string
 }
 
 // Custom HTTP client with authentication
@@ -53,7 +55,8 @@ type authTransport struct {
 }
 
 func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	req.SetBasicAuth(t.key, t.secret)
+	// Use an empty username with the secret as the password
+	req.SetBasicAuth("", t.secret)
 	return t.base.RoundTrip(req)
 }
 
@@ -77,19 +80,40 @@ func NewAuthClient(url, key, secret string) (*ethclient.Client, error) {
 }
 
 func main() {
+	// Define command-line flags
+	tenantIDFlag := flag.String("tenant", "", "Tenant ID (required)")
+	contractAddressFlag := flag.String("contract", "", "Contract address to index (required)")
+	contractABIFlag := flag.String("abi", "", "Contract ABI JSON string (required)")
+	startBlockFlag := flag.Uint64("startBlock", 0, "Starting block number (required)")
+
+	// Parse command-line arguments
+	flag.Parse()
+
 	// Load environment variables
 	if err := godotenv.Load(); err != nil {
-		log.Fatal("Error loading .env file")
+		log.Println("Warning: .env file not found, using environment variables")
+	}
+
+	// Validate required flags
+	if *tenantIDFlag == "" {
+		log.Fatal("Error: tenant ID is required. Use -tenant flag")
+	}
+
+	if *contractAddressFlag == "" {
+		log.Fatal("Error: contract address is required. Use -contract flag")
+	}
+
+	if *contractABIFlag == "" {
+		log.Fatal("Error: contract ABI is required. Use -abi flag")
+	}
+
+	if *startBlockFlag == 0 {
+		log.Fatal("Error: start block is required. Use -startBlock flag")
 	}
 
 	// Initialize configuration
-	startBlock, err := strconv.ParseUint(os.Getenv("START_BLOCK"), 10, 64)
-	if err != nil {
-		log.Fatal("Invalid START_BLOCK value in .env file")
-	}
-
 	config := &Config{
-		RPCURL:          fmt.Sprintf("%s%s", os.Getenv("RPC_URL"), os.Getenv("INFURA_API_KEY")),
+		RPCURL:          os.Getenv("RPC_URL"),
 		RPCKey:          os.Getenv("INFURA_API_KEY"),
 		RPCSecret:       os.Getenv("INFURA_API_SECRET"),
 		DBUser:          os.Getenv("DB_USER"),
@@ -97,9 +121,10 @@ func main() {
 		DBHost:          os.Getenv("DB_HOST"),
 		DBPort:          os.Getenv("DB_PORT"),
 		DBName:          os.Getenv("DB_NAME"),
-		ContractAddress: os.Getenv("CONTRACT_ADDRESS"),
-		ContractABI:     os.Getenv("CONTRACT_ABI"),
-		StartBlock:      startBlock,
+		ContractAddress: *contractAddressFlag,
+		ContractABI:     *contractABIFlag,
+		StartBlock:      *startBlockFlag,
+		TenantID:        *tenantIDFlag,
 	}
 
 	// Initialize indexer
@@ -129,7 +154,7 @@ func NewIndexer(config *Config) (*Indexer, error) {
 	// Initialize Ethereum client with HTTP and API key authentication
 	client, err := NewAuthClient(config.RPCURL, config.RPCKey, config.RPCSecret)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Base Sepolia: %v", err)
+		return nil, fmt.Errorf("failed to connect to blockchain: %v", err)
 	}
 
 	// Construct Supabase connection string
@@ -192,7 +217,7 @@ func NewIndexer(config *Config) (*Indexer, error) {
 		return nil, fmt.Errorf("failed to get latest block number after retries: %v", err)
 	}
 
-	log.Printf("Connected to Base Sepolia. Current block: %d", blockNumber)
+	log.Printf("Connected to blockchain. Current block: %d", blockNumber)
 
 	return &Indexer{
 		client: client,
@@ -209,52 +234,46 @@ func (i *Indexer) ensureTables(ctx context.Context) error {
 	}
 	defer tx.Rollback(ctx)
 
-	// Create txs table
-	_, err = tx.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS txs (
-			id SERIAL PRIMARY KEY,
-			block_number BIGINT NOT NULL,
-			transaction_hash VARCHAR(66) NOT NULL,
-			event_type VARCHAR(50) NOT NULL,
-			contract_address VARCHAR(42) NOT NULL,
-			event_data JSONB NOT NULL,
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
+	// Check if the tenant_id is a valid UUID
+	var isValidUUID bool
+	err = tx.QueryRow(ctx, `
+		SELECT $1::text::uuid IS NOT NULL
+	`, i.config.TenantID).Scan(&isValidUUID)
+
+	if err != nil || !isValidUUID {
+		return fmt.Errorf("invalid tenant ID format: %v", err)
+	}
+
+	// Verify tenant exists
+	var tenantExists bool
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1::uuid)
+	`, i.config.TenantID).Scan(&tenantExists)
+
 	if err != nil {
-		return fmt.Errorf("failed to create txs table: %v", err)
+		return fmt.Errorf("failed to verify tenant existence: %v", err)
 	}
 
-	// Add unique constraint if it doesn't exist
+	if !tenantExists {
+		return fmt.Errorf("tenant with ID %s does not exist", i.config.TenantID)
+	}
+
+	// Update the tenant_services table to mark this service as running
 	_, err = tx.Exec(ctx, `
-		DO $$ 
-		BEGIN
-			IF NOT EXISTS (
-				SELECT 1 FROM pg_constraint 
-				WHERE conname = 'txs_transaction_hash_key'
-			) THEN
-				ALTER TABLE txs ADD CONSTRAINT txs_transaction_hash_key UNIQUE (transaction_hash);
-			END IF;
-		END $$;
-	`)
+		INSERT INTO tenant_services
+		(tenant_id, service_type, target_identifier, last_processed_id, status, config, metadata)
+		VALUES ($1::uuid, 'evm-indexer', $2, $3, 'running', $4, jsonb_build_object('start_time', to_char(NOW(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')))
+		ON CONFLICT (tenant_id, service_type, target_identifier)
+		DO UPDATE SET 
+			status = 'running',
+			updated_at = CURRENT_TIMESTAMP,
+			container_id = NULL,
+			metadata = jsonb_build_object('start_time', to_char(NOW(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+	`, i.config.TenantID, i.config.ContractAddress, strconv.FormatUint(i.config.StartBlock, 10),
+		json.RawMessage(`{"contract_abi": "configured"}`))
+
 	if err != nil {
-		return fmt.Errorf("failed to add unique constraint: %v", err)
-	}
-
-	// Create indexes
-	indexes := []string{
-		"CREATE INDEX IF NOT EXISTS idx_txs_block_number ON txs(block_number)",
-		"CREATE INDEX IF NOT EXISTS idx_txs_transaction_hash ON txs(transaction_hash)",
-		"CREATE INDEX IF NOT EXISTS idx_txs_event_type ON txs(event_type)",
-		"CREATE INDEX IF NOT EXISTS idx_txs_contract_address ON txs(contract_address)",
-		"CREATE INDEX IF NOT EXISTS idx_txs_event_data ON txs USING GIN (event_data)",
-	}
-
-	for _, index := range indexes {
-		_, err = tx.Exec(ctx, index)
-		if err != nil {
-			return fmt.Errorf("failed to create index: %v", err)
-		}
+		return fmt.Errorf("failed to update tenant_services: %v", err)
 	}
 
 	// Commit the transaction
@@ -266,19 +285,40 @@ func (i *Indexer) ensureTables(ctx context.Context) error {
 }
 
 func (i *Indexer) Start(ctx context.Context) {
-	log.Println("Starting Base Sepolia indexer...")
+	log.Println("Starting blockchain indexer...")
 
-	// Ensure tables exist
-	if err := i.ensureTables(ctx); err != nil {
-		log.Printf("Warning: %v", err)
-	}
-
-	// Get the latest processed block from database
+	// Get the latest processed block from database for this tenant and contract
 	var lastProcessedBlock uint64
-	err := i.db.QueryRow(ctx, "SELECT COALESCE(MAX(block_number), 0) FROM txs").Scan(&lastProcessedBlock)
+	err := i.db.QueryRow(ctx, `
+		SELECT COALESCE(MAX(block_number), 0) 
+		FROM evm_indexer 
+		WHERE tenant_id = $1::uuid AND contract_address = $2
+	`, i.config.TenantID, i.config.ContractAddress).Scan(&lastProcessedBlock)
+
 	if err != nil {
 		log.Printf("Failed to get last processed block: %v", err)
-		lastProcessedBlock = i.config.StartBlock
+
+		// Also check tenant_services table for last_processed_id
+		var lastProcessedID string
+		err = i.db.QueryRow(ctx, `
+			SELECT COALESCE(last_processed_id, '0')
+			FROM tenant_services
+			WHERE tenant_id = $1::uuid 
+			  AND service_type = 'evm-indexer'
+			  AND target_identifier = $2
+		`, i.config.TenantID, i.config.ContractAddress).Scan(&lastProcessedID)
+
+		if err != nil {
+			log.Printf("Also failed to get last processed ID from tenant_services: %v", err)
+			lastProcessedBlock = i.config.StartBlock
+		} else {
+			// Convert last processed ID to uint64 if possible
+			if val, err := strconv.ParseUint(lastProcessedID, 10, 64); err == nil {
+				lastProcessedBlock = val
+			} else {
+				lastProcessedBlock = i.config.StartBlock
+			}
+		}
 	}
 
 	// Start from the greater of last processed block or configured start block
@@ -289,7 +329,7 @@ func (i *Indexer) Start(ctx context.Context) {
 	log.Printf("Starting from block %d", lastProcessedBlock)
 
 	// Create ticker for polling with a longer interval
-	ticker := time.NewTicker(30 * time.Second) // Increased to 30 seconds to be more conservative
+	ticker := time.NewTicker(30 * time.Second) // 30 seconds to be conservative
 	defer ticker.Stop()
 
 	// Parse contract ABI once
@@ -415,13 +455,13 @@ func (i *Indexer) Start(ctx context.Context) {
 						continue
 					}
 
-					// Store event in database
+					// Store event in database - now using evm_indexer table with tenant_id
 					result, err := i.db.Exec(ctx, `
-						INSERT INTO txs 
-						(block_number, transaction_hash, event_type, contract_address, event_data)
-						VALUES ($1, $2, $3, $4, $5)
-						ON CONFLICT (transaction_hash) DO NOTHING
-					`, vLog.BlockNumber, vLog.TxHash.Hex(), event.Name,
+						INSERT INTO evm_indexer 
+						(tenant_id, block_number, transaction_hash, event_type, contract_address, event_data)
+						VALUES ($1::uuid, $2, $3, $4, $5, $6)
+						ON CONFLICT (tenant_id, transaction_hash) DO NOTHING
+					`, i.config.TenantID, vLog.BlockNumber, vLog.TxHash.Hex(), event.Name,
 						vLog.Address.Hex(), eventDataJSON)
 					if err != nil {
 						log.Printf("Failed to store %s event: %v", event.Name, err)
@@ -436,6 +476,23 @@ func (i *Indexer) Start(ctx context.Context) {
 					}
 				}
 
+				// After processing logs, update the last processed block
+				_, err = i.db.Exec(ctx, `
+					UPDATE tenant_services
+					SET last_processed_id = $1,
+						updated_at = CURRENT_TIMESTAMP,
+						metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{last_update}', $2::jsonb)
+					WHERE tenant_id = $3::uuid
+					AND service_type = 'evm-indexer'
+					AND target_identifier = $4
+				`, strconv.FormatUint(endBlock, 10),
+					json.RawMessage(fmt.Sprintf(`"%s"`, time.Now().Format(time.RFC3339))),
+					i.config.TenantID, i.config.ContractAddress)
+
+				if err != nil {
+					log.Printf("Failed to update last processed ID: %v", err)
+				}
+
 				// Update last processed block
 				lastProcessedBlock = endBlock
 				log.Printf("Processed blocks %d-%d, found %d events (%d new, %d skipped)",
@@ -446,90 +503,25 @@ func (i *Indexer) Start(ctx context.Context) {
 			}
 
 		case <-ctx.Done():
-			return
-		}
-	}
-}
+			// Update status to stopped when shutting down
+			_, err := i.db.Exec(ctx, `
+				UPDATE tenant_services
+				SET status = 'stopped',
+					updated_at = CURRENT_TIMESTAMP,
+					metadata = jsonb_set(
+						COALESCE(metadata, '{}'::jsonb), 
+						'{stop_time}', 
+						to_jsonb(to_char(NOW(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')::text)
+					)
+				WHERE tenant_id = $1::uuid
+				AND service_type = 'evm-indexer'
+				AND target_identifier = $2
+			`, i.config.TenantID, i.config.ContractAddress)
 
-func (i *Indexer) subscribeToContractEvents(ctx context.Context) {
-	contractAddress := common.HexToAddress(i.config.ContractAddress)
-	contractABI, err := abi.JSON(strings.NewReader(i.config.ContractABI))
-	if err != nil {
-		log.Printf("Failed to parse contract ABI: %v", err)
-		return
-	}
-
-	// Create a filter query starting from the specified block
-	query := ethereum.FilterQuery{
-		Addresses: []common.Address{contractAddress},
-		FromBlock: big.NewInt(int64(i.config.StartBlock)),
-	}
-
-	// Subscribe to logs
-	logs := make(chan types.Log)
-	sub, err := i.client.SubscribeFilterLogs(ctx, query, logs)
-	if err != nil {
-		log.Printf("Failed to subscribe to contract events: %v", err)
-		return
-	}
-	defer sub.Unsubscribe()
-
-	for {
-		select {
-		case err := <-sub.Err():
-			log.Printf("Contract event subscription error: %v", err)
-			// Attempt to reconnect after a delay
-			time.Sleep(5 * time.Second)
-			sub, err = i.client.SubscribeFilterLogs(ctx, query, logs)
 			if err != nil {
-				log.Printf("Failed to resubscribe to contract events: %v", err)
-				continue
-			}
-		case vLog := <-logs:
-			// Process the log
-			event, err := contractABI.EventByID(vLog.Topics[0])
-			if err != nil {
-				log.Printf("Failed to get event from log: %v", err)
-				continue
+				log.Printf("Failed to update service status to stopped: %v", err)
 			}
 
-			// Create a map to store event data
-			eventData := make(map[string]interface{})
-
-			// Unpack all event data into the map
-			err = contractABI.UnpackIntoMap(eventData, event.Name, vLog.Data)
-			if err != nil {
-				log.Printf("Failed to unpack %s event: %v", event.Name, err)
-				continue
-			}
-
-			// Convert event data to JSON
-			eventDataJSON, err := json.Marshal(eventData)
-			if err != nil {
-				log.Printf("Failed to marshal event data to JSON: %v", err)
-				continue
-			}
-
-			// Store event in database
-			result, err := i.db.Exec(ctx, `
-				INSERT INTO txs 
-				(block_number, transaction_hash, event_type, contract_address, event_data)
-				VALUES ($1, $2, $3, $4, $5)
-				ON CONFLICT (transaction_hash) DO NOTHING
-			`, vLog.BlockNumber, vLog.TxHash.Hex(), event.Name,
-				vLog.Address.Hex(), eventDataJSON)
-			if err != nil {
-				log.Printf("Failed to store %s event: %v", event.Name, err)
-				continue
-			}
-
-			// Log whether the event was new or skipped
-			if result.RowsAffected() > 0 {
-				log.Printf("New event stored: %s (tx: %s)", event.Name, vLog.TxHash.Hex())
-			} else {
-				log.Printf("Skipped duplicate event: %s (tx: %s)", event.Name, vLog.TxHash.Hex())
-			}
-		case <-ctx.Done():
 			return
 		}
 	}

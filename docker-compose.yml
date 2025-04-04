@@ -1,60 +1,75 @@
-version: '3.8'
-
 services:
-  postgres:
+  metabase-db:
     image: postgres:15
+    container_name: metabase-db
     environment:
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
-      POSTGRES_DB: ${DB_NAME:-indexer}
+      POSTGRES_USER: metabase
+      POSTGRES_PASSWORD: metabase
+      POSTGRES_DB: metabase
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+      - metabase_db_data:/var/lib/postgresql/data
+    networks:
+      - default
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U metabase"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  web3-indexer:
-    build:
-      context: ./packages/go-web3-superbase
-      dockerfile: Dockerfile
-    depends_on:
-      postgres:
-        condition: service_healthy
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase
+    ports:
+      - "3000:3000"
     environment:
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_USER=${DB_USER:-postgres}
-      - DB_PASSWORD=${DB_PASSWORD:-password}
-      - DB_NAME=${DB_NAME:-indexer}
-      - ETHEREUM_RPC_URL=${ETHEREUM_RPC_URL}
-      - POLYGON_RPC_URL=${POLYGON_RPC_URL}
-      - SEPOLIA_RPC_URL=${SEPOLIA_RPC_URL}
+      # Database Configuration
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: metabase
+      MB_DB_PORT: 5432
+      MB_DB_USER: metabase
+      MB_DB_PASS: metabase
+      MB_DB_HOST: metabase-db
+      
+      # JWT Authentication
+      MB_JWT_ENABLED: "true"
+      MB_JWT_SHARED_SECRET: ${JWT_SECRET}
+      
+      # Embedding Configuration
+      MB_EMBEDDING_APP_ORIGIN: ${APP_URL}
+      
+      # Memory settings
+      JAVA_OPTS: "-Xmx1g -Djava.security.egd=file:/dev/./urandom"
+      
+      # Logging
+      MB_EMOJI_IN_LOGS: "false"
+      MB_LOGGING_LEVEL: DEBUG
+      
     volumes:
-      - ./packages/go-web3-superbase/config:/app/config
-      - ./packages/go-web3-superbase/abis:/app/abis
-    command: [
-      "--config", "/app/config/config.json",
-      "--contract", "${CONTRACT_NAME:-erc20}"
-    ]
+      - metabase_data:/metabase-data
+    networks:
+      - default
+    depends_on:
+      metabase-db:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
-  # Add more services here as needed
-  # Example:
-  # api-service:
-  #   build:
-  #     context: ./packages/api-service
-  #     dockerfile: Dockerfile
-  #   depends_on:
-  #     - postgres
-  #   environment:
-  #     - DB_HOST=postgres
-  #     - DB_PORT=5432
-  #   ports:
-  #     - "8080:8080"
+  # Build the evm-indexer image to be used for tenant-specific jobs
+  evm-indexer-builder:
+    build:
+      context: ./packages/evm-indexer
+      dockerfile: Dockerfile
+    image: evm-indexer:latest
+    # This service is only used to build the image, not to run any containers
+    command: echo "EVM Indexer image built successfully"
+    deploy:
+      replicas: 0
 
 volumes:
-  postgres_data: 
+  metabase_data:
+  metabase_db_data:
