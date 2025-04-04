@@ -10,7 +10,11 @@
     "indexer": "pnpm --filter @ethbucharest/evm-indexer start",
     "indexer:build": "pnpm --filter @ethbucharest/evm-indexer build",
     "indexer:test": "pnpm --filter @ethbucharest/evm-indexer test",
-    "indexer:clean": "pnpm --filter @ethbucharest/evm-indexer clean"
+    "indexer:clean": "pnpm --filter @ethbucharest/evm-indexer clean",
+    "backend:start": "cd packages/backend && go run main.go",
+    "backend:docs": "cd packages/backend && $HOME/go/bin/swag init",
+    "backend:build": "cd packages/backend && go build -o bin/server",
+    "backend:test": "cd packages/backend && go test ./..."
   },
   "keywords": [],
   "author": "",
